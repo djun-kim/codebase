@@ -1,0 +1,14 @@
+Mon  5 May 2008 10:29:40 PDT (r43)
+* Added support for updating a file
+* Using new codemetrics API, we read each file only once.
+* Support hierarchical display of files and directories (using book outlines
+  to provide structure)
+* Provide file context for better analysis (using new Codemetrics API)
+* Rewrote import (mapdir) code substantially
+* Added this CHANGELOG
+
+Thu 25 Feb 2010 20:45:17 PST 
+* Added configuration option to ignore symbolic links
+* codebase_flush_codebase() now delete url_alias entries
+
+

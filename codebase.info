@@ -1,0 +1,10 @@
+; $Id: #
+name = Codebase
+description = Supports importing/exporting/managing a hierarchy of files.
+package = Development
+core = 6.x
+dependencies[] = mapdir
+dependencies[] = book
+php = 5.2
+
+

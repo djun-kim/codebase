@@ -1,0 +1,434 @@
+<?php
+// $Id:$
+/** 
+ * @file
+ * Supports importing/exporting/managing a hierarchy of files as a codebase.
+ * 
+ */
+
+/**
+ * Implementation of hook_perm().
+ */
+function codebase_perm() {
+  return array(
+    'administer codebase',
+    'initialize codebase',
+    'update codebase file',
+    );
+}
+
+/**
+ * Implementation of hook_menu().
+ */
+function codebase_menu() {
+  return array(
+      'admin/settings/codebase' => array(
+        'title' => 'Codebase configuration',
+        'description' => 'Settings for Codebase.',
+        'access arguments' => array('administer codebase'),
+        'page callback' => 'drupal_get_form',
+        'page arguments' => array('codebase_admin_settings'),
+        'file' => 'codebase_admin.inc',
+        ),
+      'admin/content/codebase/reset' => array(
+        'title' => 'Clear Codebase codebase',
+        'description' => 'Clear Codebase Codebase.',
+        'access arguments' => array('administer codebase'),
+        'page callback' => 'drupal_get_form',
+        'page arguments' => array('codebase_clear'),
+        'file' => 'codebase_admin.inc',
+        ),
+      'admin/content/codebase/init' => array(
+        'title' => 'Initialize Codebase',
+        'description' => '(Re)initialize the codebase codebase',
+        'access arguments' => array('initialize codebase'),
+        'page callback' => 'drupal_get_form',
+        'page arguments' => array('codebase_initialize_admin'),
+        'file' => 'codebase_admin.inc',
+        ),
+      'admin/content/codebase/update/%node' => array(
+        'title' => 'Update Codebase file node',
+        'page callback' => 'codebase_update_file',
+        'page arguments' => array(4),
+        'access arguments' => array('update codebase file'),
+        'description' => 'Update an existing Codebase file node',
+        'type' => MENU_LOCAL_TASK,
+        ),
+  );
+}
+
+function codebase_init() {
+  define('CODEMETRICS_EVERYTHING', 
+         variable_get('codemetrics_flag_everything', FALSE));
+  define('CODEMETRICS_VERBOSE', 
+         variable_get('codemetrics_flag_verbose', FALSE));
+  define('CODEMETRICS_WHITESPACE', 
+         variable_get('codemetrics_flag_whitespace', FALSE));
+}
+
+/** 
+ * A mapdir apply function.  Imports the given file.
+ */
+function codebase_apply_import_code($file, $args) {
+  global $user;
+  if (is_array($args['parent']) && count($args['parent'])) {
+    $parent = array_pop($args['parent']); 
+    array_push($args['parent'], $parent);
+  }
+  if (
+    (variable_get('codebase_follow_symlinks', "TRUE") == "FALSE") &&
+    is_link($file)) 
+    {
+      //Symbolic link; skip the file.
+      watchdog('codebase', "Skipping symbolic link %file", array('file' => $file), WATCHDOG_INFO);
+      return;
+    }
+  $file_parts = pathinfo($file);
+  $filename = isset($file_parts['basename']) ? $file_parts['basename']: '';
+  $fileext = strtolower($file_parts['extension']);
+  $type = codemetrics_file_type($file, 'drupal6');
+  $langtype = $type;
+  $file_contents = file_get_contents($file);
+
+  switch ($fileext) {
+  case 'php' :
+  case 'test' :
+  case 'inc' :
+  case 'install' :
+  case 'module' :
+    $langtype = 'drupal6'; 
+    break;
+  case 'pl' :
+    $langtype = 'perl'; 
+    break;
+  case 'sh' :
+    $langtype = 'shell'; 
+    break;
+  }
+
+  // first create the source code node
+  $node = (Object) array();
+  $node->type = 'geshinode';
+  $node->body = $file_contents;
+  $node->title = t("Source of ") . $filename;
+  $node->source_code_language = $langtype;
+  $node->uid = $user->uid;
+  $node = node_submit($node);
+  node_save($node);
+  $nid = $node->nid;
+
+  $counts = array();
+  codemetrics_analyze_string($file_contents, $file, $type, $counts);
+
+  unset($file_contents);
+
+  $codebase_root = variable_get('codebase_target_directory', '/');
+  $str_offset =  strpos($file, $codebase_root);
+  if ($str_offset !== FALSE) {
+    $relative_path = substr($file, strlen($codebase_root) - $str_offset);
+  }
+
+  // now create the file node
+  $filenode = (Object) array();
+  $filenode->type = 'filenode';
+  $filenode->title = $filename;
+  $filenode->uid = $user->uid;
+  $filenode->field_filepath[0]['value'] = '$CODEBASE_ROOT'. $relative_path;
+  $filenode->field_contents[0]['nid'] = $nid;
+
+  $filenode = node_submit($filenode);
+  node_save($filenode);
+
+  // reference back to filenode in the source code node
+  $node->field_filenode[0]['nid'] = $filenode->nid;
+  $node = node_submit($node);
+  node_save($node);
+
+  // NB: need to have the reciprocal references in file node and 
+  // source nodes before doing the metrics node, because we need the
+  // link from source to filenode.
+
+  // then create the metrics node
+  $metricsnode = (Object) array();
+  $metricsnode->type = 'metrics_report';
+  $metricsnode->title = t("Metrics for ") . $filename;
+  $metricsnode->uid = $user->uid;
+  $metrics_report = codemetrics_report_file($file, 'drupal6', $nid, &$counts, 'html');
+  $metricsnode->body = $metrics_report;
+  $metricsnode->format = 2;
+  $metricsnode = node_submit($metricsnode);
+  node_save($metricsnode);
+  $metricsnode_nid = $metricsnode->nid;
+
+  // now add the metrics node to the file node
+  $filenode->field_metrics[0]['nid'] = $metricsnode_nid;
+
+  // add $dirnode as child of $parent
+  $filenode->book = array();
+  if ($parent != '') {
+    $parentnode = node_load($parent);
+    $filenode->book['bid'] = $parentnode->book['bid'];
+    $filenode->book['plid'] = $parentnode->book['mlid'];
+    $filenode->book['menu_name'] = $parentnode->book['menu_name'];
+  }
+  else {
+    // create new book
+    $filenode->book['nid'] = 'new';
+    $filenode->book['bid'] = 'new';
+  }
+  $filenode->book += _book_link_defaults(!empty($filenode->nid) ? $filenode->nid : 'new');
+
+  $filenode = node_submit($filenode);
+  node_save($filenode);
+  
+
+  // reference back to filenode in the metrics code node
+  $metricsnode->field_filenode[0]['nid'] = $filenode->nid;
+  $metricsnode = node_submit($metricsnode);
+  node_save($metricsnode);
+}
+
+/** 
+ * A mapdir apply function.  Imports the given directory.
+ */
+function codebase_apply_import_directory($dir, $args) {
+  global $user;
+  if (is_array($args['parent']) && count($args['parent'])) {
+    $parent = array_pop($args['parent']); 
+    array_push($args['parent'], $parent);
+  }
+
+  // Todo: record directory stats
+
+  // create a directory node
+  $dirnode = (Object) array();
+  $dirnode->type = 'dir';
+  $dirnode->uid = $user->uid;
+
+  $file_parts = pathinfo($dir);
+  $dirname = isset($file_parts['basename']) ? $file_parts['basename']: '';
+  $dirnode->title = $dirname;
+
+  $codebase_root = variable_get('codebase_target_directory', '/');
+  $str_offset =  strpos($dir, $codebase_root);
+  if ($str_offset !== FALSE) {
+    $relative_path = substr($dir, strlen($codebase_root) - $str_offset);
+  }
+  
+  $dirnode->field_path[0]['value'] = '$CODEBASE_ROOT' . $relative_path;
+
+  // add $dirnode as child of $parent
+  $dirnode->book = array();
+  if ($parent != '') {
+    $parentnode = node_load($parent);
+    $dirnode->book['bid'] = $parentnode->book['bid'];
+    $dirnode->book['plid'] = $parentnode->book['mlid'];
+    $dirnode->book['menu_name'] = $parentnode->book['menu_name'];
+  }
+  else {
+    // create new book
+    $dirnode->book['nid'] = 'new';
+    $dirnode->book['bid'] = 'new';
+  }
+  $dirnode->book += _book_link_defaults(!empty($dirnode->nid) ? $dirnode->nid : 'new');
+
+  $dirnode->type = 'dir';
+  $dirnode = node_submit($dirnode);
+  node_save($dirnode);
+  $dirnode = node_load($dirnode->nid);
+
+  // then recursively deal with contents of directory
+
+  $parent_array = $args['parent'];
+
+  if (count($parent_array)) {
+    array_push($parent_array, $dirnode->nid);
+  }
+  else {
+    $parent_array[] = $dirnode->nid;
+  }
+
+  $args = array(
+    'order_function' => 'mapdir_order_preorder',
+    'apply_function' => array(
+      'codebase_selector_codefile' => 'codebase_apply_import_code',
+      'codebase_selector_isdir' => 'codebase_apply_import_directory',
+    ), 
+    'parent' => $parent_array,
+  );
+  $argstring =  print_r($args, TRUE);
+  mapdir_iterate($dir, &$args);
+  array_pop($args['parent']); 
+}
+
+
+/** A mapdir select function.  Returns true if the file is a source
+ *  code file, 
+ */
+function codebase_selector_codefile($file) {
+  static $ignore_patterns;
+  static $ignore_extns;
+
+  if (!count($ignore_extns)) {
+    $ignore_extns = explode(',', variable_get('codebase_ignored_file_extensions', ''));
+    $ignore_extns = array_map('trim', $ignore_extns);
+  }
+  if (!count($ignore_patterns)) {
+    watchdog('codebase', "building up cache of patterns");
+
+    $ignore_suffixes = explode(',', variable_get('codebase_ignored_file_suffixes', ''));
+    $ignore_suffixes = array_map('trim', $ignore_suffixes);
+    foreach ($ignore_suffixes as $suffix) {
+      $suff[] = "/.*". preg_quote($suffix) ."\$/";
+    }
+    $ignore_suffixes = $suff;
+    $ignore_prefixes = explode(',', variable_get('codebase_ignored_file_prefixes', ''));
+    $ignore_prefixes = array_map('trim', $ignore_prefixes);
+    foreach ($ignore_prefixes as $prefix) {
+      $pref[] = "/^". preg_quote($prefix) .".*/";
+    }
+    $ignore_prefixes = $pref;
+    $ignore_patterns = array_merge($ignore_prefixes, $ignore_suffixes);
+  }
+
+  if ((strlen($file) > 0) && !is_dir($file) ) {
+    if (mapdir_selector_file_has_extn($file, $ignore_extns) ||
+        mapdir_selector_file_preg_match($file, $ignore_patterns)) {
+      watchdog('codebase', "ignoring file $file");
+      return FALSE;
+    }
+    else {
+      return TRUE;
+    }
+  }
+}
+
+/** A mapdir select function.  Returns true if the file is a directory
+ *  and not in the excluded list.
+ */
+function codebase_selector_isdir($dir) {
+  $excluded_dirs = explode(',', variable_get('codebase_excluded_directories', ''));
+  $exdirs = array();
+  foreach ($excluded_dirs as &$excluded) {
+    $exdirs[] = trim($excluded);
+  }
+  $excluded_dirs = $exdirs;
+  $file_parts = pathinfo($dir);
+  $dirname = isset($file_parts['filename']) ? $file_parts['filename']: '';
+  if (is_dir($dir)) {
+    if (!in_array($dirname, $excluded_dirs)) {
+      return TRUE;
+    }
+    else {
+      watchdog('codebase', "ignoring directory $dir");
+    }
+  }
+}
+
+/**
+ *
+ */
+function codebase_initialize_code() {
+  $dir = variable_get('codebase_target_directory', '');
+  
+  $args = array(
+    'order_function' => 'mapdir_order_preorder',
+    'apply_function' => array(
+      'codebase_selector_codefile' => 'codebase_apply_import_code',
+      'codebase_selector_isdir' => 'codebase_apply_import_directory',
+      ),
+  );
+  $args['parent'] = NULL;
+  watchdog('codebase', "Initializing codebase");
+  codebase_apply_import_directory($dir, $args);
+}
+
+
+/**
+ *
+ */
+function codebase_flush_codebase() {
+  $sql_delete_node_revisions = 
+    "DELETE FROM {node_revisions} ". 
+    "WHERE nid IN " .
+    "  (SELECT nid FROM {node} ".
+    "   WHERE type='geshinode' OR type='metrics_report' OR type='dir') ";
+  $sql_delete_file_nodes = 
+    "DELETE FROM {node} WHERE type = 'filenode'";
+  $sql_delete_code_nodes = 
+    "DELETE FROM {node} WHERE type = 'geshinode'";
+  $sql_delete_metrics_nodes = 
+    "DELETE FROM {node} WHERE type = 'metrics_report'";
+  $sql_delete_directories = 
+    "DELETE FROM {node} WHERE type = 'dir'";
+  $sql_delete_dir_url_aliases = 
+    "DELETE FROM {url_alias} WHERE dst LIKE 'directory/%'";
+  $sql_delete_file_url_aliases = 
+    "DELETE FROM {url_alias} WHERE dst LIKE 'file/%'";
+  $sql_delete_metrics_url_aliases = 
+    "DELETE FROM {url_alias} WHERE dst LIKE 'metrics/%'";
+  $sql_delete_source_url_aliases = 
+    "DELETE FROM {url_alias} WHERE dst LIKE 'source/%'";
+
+  watchdog('codebase',  "flushing node_revisions");  
+  db_query($sql_delete_node_revisions);
+  watchdog('codebase',  "flushing filenodes");
+  db_query($sql_delete_file_nodes);
+  db_query($sql_delete_file_url_aliases);
+  watchdog('codebase', "flushing code nodes");
+  db_query($sql_delete_code_nodes);
+  db_query($sql_delete_source_url_aliases);
+  watchdog('codebase', "flushing metrics nodes");
+  db_query($sql_delete_metrics_nodes);
+  db_query($sql_delete_metrics_url_aliases);
+  watchdog('codebase', "flushing directories");
+  db_query($sql_delete_directories);
+  db_query($sql_delete_dir_url_aliases);
+}
+
+/**
+ * Given a file (by its nid) update all entries for that file.
+ * Returns TRUE if update was successful, FALSE otherwise.
+ */
+function codebase_update_file($node) {
+  watchdog('codebase', "updating node " . $node->nid);
+  // update node 
+
+  $filenode = $node;
+
+  $codebase_root = variable_get('codebase_target_directory', '/');
+  $filepath = $codebase_root . $filenode->field_filepath[0]['value'];
+  $sourcenid = $filenode->field_contents[0]['nid'];
+  $metricsnid = $filenode->field_metrics[0]['nid'];
+
+  if (!file_exists($filepath)) {
+    return FALSE;
+  }
+  
+  $sourcenode = node_load($sourcenid);
+  $sourcenode->body = file_get_contents($filepath);
+  $sourcenode = node_submit($sourcenode);
+  node_save($sourcenode);
+
+  $type = codemetrics_file_type($filepath, 'drupal6');
+
+  $counts = array();
+  codemetrics_analyze_string($sourcenode->body, $filepath, $type, $counts);
+
+  // update the metrics node
+  $metricsnode = node_load($metricsnid);
+
+  $metricsnode->body = codemetrics_report_file($filepath, 'drupal6', $sourcenid, &$counts, 'html');
+  $metricsnode->type = 'metrics_report';
+  $metricsnode = node_submit($metricsnode);
+  node_save($metricsnode);
+  drupal_goto("node/" . $node->nid);
+}
+
+function codebase_theme() {
+  return array(
+    'codebase_sourceview' => array(
+       'arguments' => array('title' => NULL, 'array' => NULL, ),
+     )
+  );
+}
