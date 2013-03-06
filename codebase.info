@@ -2,9 +2,9 @@
 name = Codebase
 description = Supports importing/exporting/managing a hierarchy of files.
 package = Development
-core = 6.x
+core = 7.x
+php = 5.2
 dependencies[] = mapdir
 dependencies[] = book
-php = 5.2
-
-
+files[] = codebase.module
+files[] = codebase_admin.inc

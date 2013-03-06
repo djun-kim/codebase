@@ -1,5 +1,4 @@
 <?php
-// $Id:$
 /** 
  * @file
  * Administration functions for Codebase.
@@ -23,7 +22,7 @@ function codebase_admin_settings() {
   $form['codebase']['codebase_follow_symlinks'] = array(
     '#type' => 'select',
     '#title' => t('Follow Symbolic Links?'),
-    '#options' => array('TRUE' => 'TRUE', 'FALSE' =>'FALSE'),
+    '#options' => array('TRUE' => 'TRUE', 'FALSE' => 'FALSE'),
     '#default_value' => variable_get('codebase_follow_symlinks', ''),
     '#description' => t('Select "TRUE" if the codebase should follow symbolic links in the source directory.'),
   );
@@ -58,7 +57,13 @@ function codebase_initialize_admin($form_state) {
 
 function codebase_initialize_admin_validate($form, &$form_state) {
   if (variable_get('codebase_target_directory', '') == '' ) {
-    form_set_error('codebase_target_directory', t('Can\'t initialize codebase because the codebase directory is not set.  Please set it at the !adminlink.', array('!adminlink' => l("codebase configuration page", "admin/settings/codebase"))));
+    form_set_error('codebase_target_directory', 
+                   t('Can\'t initialize codebase because the codebase directory is not set.  Please set it at the !adminlink.',
+                   array('!adminlink' => l(t("codebase configuration page"),
+                                           "admin/settings/codebase")
+                        )
+                   )
+                 );
   }
 }
 
