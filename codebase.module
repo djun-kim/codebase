@@ -25,7 +25,7 @@ function codebase_menu() {
       'description' => 'Settings for Codebase.',
       'access arguments' => array('administer codebase'),
       'page callback' => 'drupal_get_form',
-      'page arguments' => array('codebase_admin_settings'),
+      'page arguments' => array('codebase_admin_settings_form'),
       'file' => 'codebase_admin.inc',
     ),
     'admin/content/codebase/reset' => array(
@@ -33,7 +33,7 @@ function codebase_menu() {
       'description' => 'Clear Codebase Codebase.',
       'access arguments' => array('administer codebase'),
       'page callback' => 'drupal_get_form',
-      'page arguments' => array('codebase_clear'),
+      'page arguments' => array('codebase_clear_form'),
       'file' => 'codebase_admin.inc',
     ),
     'admin/content/codebase/init' => array(
@@ -41,7 +41,7 @@ function codebase_menu() {
       'description' => '(Re)initialize the codebase codebase',
       'access arguments' => array('initialize codebase'),
       'page callback' => 'drupal_get_form',
-      'page arguments' => array('codebase_initialize_admin'),
+      'page arguments' => array('codebase_initialize_admin_form'),
       'file' => 'codebase_admin.inc',
     ),
     'admin/content/codebase/update/%node' => array(
@@ -56,18 +56,19 @@ function codebase_menu() {
 }
 
 /**
+ * Initializes state for the this module.
  */
 function codebase_init() {
-  define('CODEMETRICS_EVERYTHING',
-         variable_get('codemetrics_flag_everything', FALSE));
-  define('CODEMETRICS_VERBOSE',
-         variable_get('codemetrics_flag_verbose', FALSE));
-  define('CODEMETRICS_WHITESPACE',
-         variable_get('codemetrics_flag_whitespace', FALSE));
+#  define('CODEMETRICS_EVERYTHING',
+#         variable_get('codemetrics_flag_everything', FALSE));
+#  define('CODEMETRICS_VERBOSE',
+#         variable_get('codemetrics_flag_verbose', FALSE));
+#  define('CODEMETRICS_WHITESPACE',
+#         variable_get('codemetrics_flag_whitespace', FALSE));
 }
 
 /**
- * A mapdir apply function.  Imports the given file.
+ * A mapdir apply function - Imports the given file.
  */
 function codebase_apply_import_code($file, $args) {
   global $user;
@@ -85,8 +86,9 @@ function codebase_apply_import_code($file, $args) {
   $file_parts = pathinfo($file);
   $filename = isset($file_parts['basename']) ? $file_parts['basename'] : '';
   $fileext = strtolower($file_parts['extension']);
-  $type = codemetrics_file_type($file, 'drupal6');
-  $langtype = $type;
+  #$type = codemetrics_file_type($file, 'drupal6');
+  #$langtype = $type;
+  $langtype = 'perl';
   $file_contents = file_get_contents($file);
 
   switch ($fileext) {
@@ -99,6 +101,8 @@ function codebase_apply_import_code($file, $args) {
       break;
 
     case 'pl':
+    case 'pg':
+    case 'pm':
       $langtype = 'perl';
       break;
 
@@ -109,18 +113,23 @@ function codebase_apply_import_code($file, $args) {
   }
 
   // First create the source code node.
-  $node = (Object) array();
-  $node->type = 'geshinode';
-  $node->body = $file_contents;
-  $node->title = t("Source of") . $filename;
+  $node = new stdClass();
+  $node->type = 'problem';
+  node_object_prepare($node);
+
+  $node->language = LANGUAGE_NONE;
+  $node->field_code2[$node->language][0]['value'] =  '<code>'.$file_contents.'</code>';
+  $node->field_code2[$node->language][0]['format'] =  'geshifilter';
+  $node->title = t("Source of ") . $filename;
   $node->source_code_language = $langtype;
   $node->uid = $user->uid;
-  $node = node_submit($node);
+
   node_save($node);
+  watchdog('codebase', "saving node " . $node->nid);
   $nid = $node->nid;
 
-  $counts = array();
-  codemetrics_analyze_string($file_contents, $file, $type, $counts);
+  #$counts = array();
+  #codemetrics_analyze_string($file_contents, $file, $type, $counts);
 
   unset($file_contents);
 
@@ -131,39 +140,41 @@ function codebase_apply_import_code($file, $args) {
   }
 
   // Now create the file node.
-  $filenode = (Object) array();
+  $filenode = new stdClass();
   $filenode->type = 'filenode';
+  node_object_prepare($filenode);
+  $filenode->language = LANGUAGE_NONE;
+
   $filenode->title = $filename;
   $filenode->uid = $user->uid;
-  $filenode->field_filepath[0]['value'] = '$CODEBASE_ROOT' . $relative_path;
-  $filenode->field_contents[0]['nid'] = $nid;
+  $filenode->field_filepath[$filenode->language][0]['value'] = '$CODEBASE_ROOT' . $relative_path;
+  $filenode->field_contents[$filenode->language][0]['nid'] = $nid;
 
-  $filenode = node_submit($filenode);
   node_save($filenode);
 
   // Reference back to filenode in the source code node.
-  $node->field_filenode[0]['nid'] = $filenode->nid;
-  $node = node_submit($node);
+  $node->field_filenode[$node->language][0]['nid'] = $filenode->nid;
   node_save($node);
 
-  // NB: need to have the reciprocal references in file node and
-  // source nodes before doing the metrics node, because we need the
-  // link from source to filenode.
+  /* NB: need to have the reciprocal references in file node and
+   * source nodes before doing the metrics node, because we need the
+   * link from source to filenode.
+   */
 
   // Then create the metrics node.
-  $metricsnode = (Object) array();
-  $metricsnode->type = 'metrics_report';
-  $metricsnode->title = t("Metrics for") . $filename;
-  $metricsnode->uid = $user->uid;
-  $metrics_report = codemetrics_report_file($file, 'drupal6', $nid, &$counts, 'html');
-  $metricsnode->body = $metrics_report;
-  $metricsnode->format = 2;
-  $metricsnode = node_submit($metricsnode);
-  node_save($metricsnode);
-  $metricsnode_nid = $metricsnode->nid;
+  #$metricsnode = (Object) array();
+  #$metricsnode->type = 'metrics_report';
+  #$metricsnode->title = t("Metrics for") . $filename;
+  #$metricsnode->uid = $user->uid;
+  #$metrics_report = codemetrics_report_file($file, 'drupal6', $nid, $counts, 'html');
+  #$metricsnode->body = $metrics_report;
+  #$metricsnode->format = 2;
+  #$metricsnode = node_submit($metricsnode);
+  #node_save($metricsnode);
+  #$metricsnode_nid = $metricsnode->nid;
 
-  // Now add the metrics node to the file node.
-  $filenode->field_metrics[0]['nid'] = $metricsnode_nid;
+  #// Now add the metrics node to the file node.
+  #$filenode->field_metrics[$node->language][0]['nid'] = $metricsnode_nid;
 
   // Add $dirnode as child of $parent.
   $filenode->book = array();
@@ -183,15 +194,15 @@ function codebase_apply_import_code($file, $args) {
   $filenode = node_submit($filenode);
   node_save($filenode);
 
-
-  // Reference back to filenode in the metrics code node.
-  $metricsnode->field_filenode[0]['nid'] = $filenode->nid;
-  $metricsnode = node_submit($metricsnode);
-  node_save($metricsnode);
+  #// Reference back to filenode in the metrics code node.
+  #$metricsnode->field_filenode[$metricsnode->language][0]['nid'] = $filenode->nid;
+  #$metricsnode = node_submit($metricsnode);
+  #node_save($metricsnode);
 }
 
 /**
- * A mapdir apply function.  Imports the given directory.
+ * A mapdir apply function - imports the given directory.
+ * @todo: record directory stats
  */
 function codebase_apply_import_directory($dir, $args) {
   global $user;
@@ -199,14 +210,20 @@ function codebase_apply_import_directory($dir, $args) {
     $parent = array_pop($args['parent']);
     array_push($args['parent'], $parent);
   }
+  else {
+    $parent = '';
+  }
 
-  /**
+  /*
    * Todo: record directory stats
    */
 
   // Create a directory node.
-  $dirnode = (Object) array();
-  $dirnode->type = 'dir';
+  $dirnode = new stdClass();
+  $dirnode->type = 'directory';
+  node_object_prepare($dirnode);
+
+  $dirnode->language = LANGUAGE_NONE;
   $dirnode->uid = $user->uid;
 
   $file_parts = pathinfo($dir);
@@ -219,7 +236,7 @@ function codebase_apply_import_directory($dir, $args) {
     $relative_path = substr($dir, strlen($codebase_root) - $str_offset);
   }
 
-  $dirnode->field_path[0]['value'] = '$CODEBASE_ROOT' . $relative_path;
+  $dirnode->field_filepath[$dirnode->language][0]['value'] = '$CODEBASE_ROOT' . $relative_path;
 
   // Add $dirnode as child of $parent.
   $dirnode->book = array();
@@ -236,12 +253,13 @@ function codebase_apply_import_directory($dir, $args) {
   }
   $dirnode->book += _book_link_defaults(!empty($dirnode->nid) ? $dirnode->nid : 'new');
 
-  $dirnode->type = 'dir';
+  $dirnode->type = 'directory';
   $dirnode = node_submit($dirnode);
+
   node_save($dirnode);
   $dirnode = node_load($dirnode->nid);
 
-  // Then recursively deal with contents of directory.
+  /* Then recursively deal with contents of directory. */
 
   $parent_array = $args['parent'];
 
@@ -261,13 +279,13 @@ function codebase_apply_import_directory($dir, $args) {
     'parent' => $parent_array,
   );
   $argstring = print_r($args, TRUE);
-  mapdir_iterate($dir, &$args);
+  mapdir_iterate($dir, $args);
   array_pop($args['parent']);
 }
 
 
 /**
- * A mapdir select function; returns TRUE if the file is a source code file.
+ * A mapdir select function - returns TRUE if the file is a source code file.
  */
 function codebase_selector_codefile($file) {
   static $ignore_patterns;
@@ -295,7 +313,7 @@ function codebase_selector_codefile($file) {
     $ignore_patterns = array_merge($ignore_prefixes, $ignore_suffixes);
   }
 
-  if ( (strlen($file) > 0) && !is_dir($file) ) {
+  if ((strlen($file) > 0) && !is_dir($file)) {
     if (mapdir_selector_file_has_extn($file, $ignore_extns) ||
         mapdir_selector_file_preg_match($file, $ignore_patterns)) {
       watchdog('codebase', "ignoring file $file");
@@ -308,13 +326,12 @@ function codebase_selector_codefile($file) {
 }
 
 /**
- * A mapdir select function.  Returns true if the file is a directory
- *  and not in the excluded list.
+ * A mapdir select fn - returns TRUE if $dir is a directory and not excluded.
  */
 function codebase_selector_isdir($dir) {
   $excluded_dirs = explode(',', variable_get('codebase_excluded_directories', ''));
   $exdirs = array();
-  foreach ($excluded_dirs as &$excluded) {
+  foreach ($excluded_dirs as $excluded) {
     $exdirs[] = trim($excluded);
   }
   $excluded_dirs = $exdirs;
@@ -331,6 +348,7 @@ function codebase_selector_isdir($dir) {
 }
 
 /**
+ * Initializes a codebase, i.e., imports a directory.
  */
 function codebase_initialize_code() {
   $dir = variable_get('codebase_target_directory', '');
@@ -349,48 +367,50 @@ function codebase_initialize_code() {
 
 
 /**
+ * Wipes out all entries for a codebase.
  */
 function codebase_flush_codebase() {
-  $sql_delete_node_revision =
-    "DELETE FROM {node_revision} " .
+  $sql_delete_node_revision
+    = "DELETE FROM {node_revision} " .
     "WHERE nid IN " .
     "  (SELECT nid FROM {node} " .
-    "   WHERE type='geshinode' OR type='metrics_report' OR type='dir') ";
-  $sql_delete_file_nodes =
-    "DELETE FROM {node} WHERE type = 'filenode'";
-  $sql_delete_code_nodes =
-    "DELETE FROM {node} WHERE type = 'geshinode'";
-  $sql_delete_metrics_nodes =
-    "DELETE FROM {node} WHERE type = 'metrics_report'";
-  $sql_delete_directories =
-    "DELETE FROM {node} WHERE type = 'dir'";
-  $sql_delete_dir_url_aliases =
-    "DELETE FROM {url_alias} WHERE dst LIKE 'directory/%'";
-  $sql_delete_file_url_aliases =
-    "DELETE FROM {url_alias} WHERE dst LIKE 'file/%'";
-  $sql_delete_metrics_url_aliases =
-    "DELETE FROM {url_alias} WHERE dst LIKE 'metrics/%'";
-  $sql_delete_source_url_aliases =
-    "DELETE FROM {url_alias} WHERE dst LIKE 'source/%'";
+    "   WHERE type='problem' OR type='metrics_report' OR type='dir') ";
+  $sql_delete_file_nodes
+    = "DELETE FROM {node} WHERE type = 'filenode'";
+  $sql_delete_code_nodes
+    = "DELETE FROM {node} WHERE type = 'problem'";
+#  $sql_delete_metrics_nodes
+#    = "DELETE FROM {node} WHERE type = 'metrics_report'";
+  $sql_delete_directories
+    = "DELETE FROM {node} WHERE type = 'directory'";
+
+  $sql_delete_dir_url_aliases
+    = "DELETE FROM {url_alias} WHERE alias LIKE 'directory/%'";
+  $sql_delete_file_url_aliases
+    = "DELETE FROM {url_alias} WHERE alias LIKE 'file/%'";
+#  $sql_delete_metrics_url_aliases
+#    = "DELETE FROM {url_alias} WHERE alias LIKE 'metrics/%'";
+  $sql_delete_problem_url_aliases
+    = "DELETE FROM {url_alias} WHERE alias LIKE 'problem/%'";
 
   watchdog('codebase', "flushing node_revision");
   db_query($sql_delete_node_revision);
-  watchdog('codebase', "flushing filenodes");
+  watchdog('codebase', "flushing filenodes and aliases");
   db_query($sql_delete_file_nodes);
   db_query($sql_delete_file_url_aliases);
-  watchdog('codebase', "flushing code nodes");
+  watchdog('codebase', "flushing code nodes and aliases");
   db_query($sql_delete_code_nodes);
-  db_query($sql_delete_source_url_aliases);
-  watchdog('codebase', "flushing metrics nodes");
-  db_query($sql_delete_metrics_nodes);
-  db_query($sql_delete_metrics_url_aliases);
-  watchdog('codebase', "flushing directories");
+  db_query($sql_delete_problem_url_aliases);
+#  watchdog('codebase', "flushing metrics nodes and aliases");
+#  db_query($sql_delete_metrics_nodes);
+#  db_query($sql_delete_metrics_url_aliases);
+  watchdog('codebase', "flushing directories and aliases");
   db_query($sql_delete_directories);
   db_query($sql_delete_dir_url_aliases);
 }
 
 /**
- * Given a file (by its nid) update all entries for that file.
+ * Given a file (specified by $node->nid), update all entries for that file.
  * Returns TRUE if update was successful, FALSE otherwise.
  */
 function codebase_update_file($node) {
@@ -399,40 +419,42 @@ function codebase_update_file($node) {
   $filenode = $node;
 
   $codebase_root = variable_get('codebase_target_directory', '/');
-  $filepath = $codebase_root . $filenode->field_filepath[0]['value'];
-  $sourcenid = $filenode->field_contents[0]['nid'];
-  $metricsnid = $filenode->field_metrics[0]['nid'];
+  $filepath = $codebase_root . $filenode->field_filepath[$node->language][0]['value'];
+  $sourcenid = $filenode->field_contents[$node->language][0]['nid'];
+  #$metricsnid = $filenode->field_metrics[$node->language][0]['nid'];
 
   if (!file_exists($filepath)) {
     return FALSE;
   }
 
   $sourcenode = node_load($sourcenid);
-  $sourcenode->body = file_get_contents($filepath);
+  $sourcenode->body[$sourcenode->language][0]['value'] = '<code>'.file_get_contents($filepath).'</code>';
   $sourcenode = node_submit($sourcenode);
   node_save($sourcenode);
 
-  $type = codemetrics_file_type($filepath, 'drupal6');
+  #$type = codemetrics_file_type($filepath, 'drupal6');
 
-  $counts = array();
-  codemetrics_analyze_string($sourcenode->body, $filepath, $type, $counts);
+  #$counts = array();
+  #codemetrics_analyze_string($sourcenode->body, $filepath, $type, $counts);
 
   // Update the metrics node.
-  $metricsnode = node_load($metricsnid);
+  #$metricsnode = node_load($metricsnid);
 
-  $metricsnode->body = codemetrics_report_file($filepath, 'drupal6', $sourcenid, &$counts, 'html');
-  $metricsnode->type = 'metrics_report';
-  $metricsnode = node_submit($metricsnode);
-  node_save($metricsnode);
+  #$metricsnode->body = codemetrics_report_file($filepath, 'drupal6', $sourcenid, $counts, 'html');
+  #$metricsnode->type = 'metrics_report';
+  #$metricsnode = node_submit($metricsnode);
+  #node_save($metricsnode);
+
   drupal_goto("node/" . $node->nid);
 }
 
 /**
+ * Theme function for a source view of a codebase entry.
  */
 function codebase_theme() {
   return array(
     'codebase_sourceview' => array(
-       'arguments' => array('title' => NULL, 'array' => NULL),
-     )
+      'arguments' => array('title' => NULL, 'array' => NULL),
+    ),
   );
 }

@@ -1,15 +1,17 @@
 <?php
-/** 
+/**
  * @file
  * Administration functions for Codebase.
- * 
  */
 
-function codebase_admin_settings() {
+/**
+ * Sets up the admin form for this module's settings page.
+ */
+function codebase_admin_settings_form() {
   $form = array();
   $form['codebase']['codebase_target_directory'] = array(
     '#type' => 'textfield',
-    '#title' => t('Directory to map'), 
+    '#title' => t('Directory to map'),
     '#default_value' => variable_get('codebase_target_directory', ''),
     '#description' => t('Specify the directory which the codebase should map'),
   );
@@ -47,7 +49,10 @@ function codebase_admin_settings() {
   return system_settings_form($form);
 }
 
-function codebase_initialize_admin($form_state) {
+/**
+ * Sets up confirmation form for codebase initialization.
+ */
+function codebase_initialize_admin_form($form, &$form_state) {
   return confirm_form(
     $form,
     t('Are you sure you want to initialize/re-initialize the codebase?'),
@@ -55,19 +60,26 @@ function codebase_initialize_admin($form_state) {
     t('This action destroys the existing code base internal representation. Rebuilding the new base may take time.'));
 }
 
-function codebase_initialize_admin_validate($form, &$form_state) {
-  if (variable_get('codebase_target_directory', '') == '' ) {
-    form_set_error('codebase_target_directory', 
-                   t('Can\'t initialize codebase because the codebase directory is not set.  Please set it at the !adminlink.',
-                   array('!adminlink' => l(t("codebase configuration page"),
-                                           "admin/settings/codebase")
-                        )
+/**
+ * Validation for confirmation form for codebase initialization.
+ */
+function codebase_initialize_admin_form_validate($form, &$form_state) {
+  if (variable_get('codebase_target_directory', '') == '') {
+    form_set_error('codebase_target_directory',
+                   t("Can't initialize codebase because the codebase directory is not set.  Please set it at the !adminlink.",
+                   array(
+                     '!adminlink' => l(t("codebase configuration page"),
+                                       "admin/settings/codebase"),
                    )
-                 );
+                 )
+    );
   }
 }
 
-function codebase_initialize_admin_submit($form, &$form_state) {
+/**
+ * Submit function for confirmation form for codebase initialization.
+ */
+function codebase_initialize_admin_form_submit($form, &$form_state) {
   $confirmed = $form_state['values']['confirm'];
   if ($confirmed) {
     codebase_initialize_code();
@@ -75,7 +87,10 @@ function codebase_initialize_admin_submit($form, &$form_state) {
   $form_state['redirect'] = 'admin/content/codebase';
 }
 
-function codebase_clear($form_state) {
+/**
+ * Sets up confirmation form for codebase flushing.
+ */
+function codebase_clear_form($form, &$form_state) {
   return confirm_form(
     $form,
     t('Are you sure you want to clear the codebase?'),
@@ -83,7 +98,10 @@ function codebase_clear($form_state) {
     t('This action destroys the existing code base internal representation. Rebuilding the new base may take time.'));
 }
 
-function codebase_clear_submit($form, &$form_state) {
+/**
+ * Submit function for confirmation form for codebase flushing.
+ */
+function codebase_clear_form_submit($form, &$form_state) {
   $confirmed = $form_state['values']['confirm'];
   if ($confirmed) {
     codebase_flush_codebase();
