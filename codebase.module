@@ -109,8 +109,24 @@ function codebase_apply_import_code($file, $args) {
     case 'sh':
       $langtype = 'shell';
       break;
-
   }
+
+  $file_lines = split('\n', $file_contents);
+
+  // Extract description
+  $descr = _codebase_parse_description($file_lines);
+
+  // Extract array of keywords.
+  $keywords = _codebase_parse_keywords($file_lines);
+
+  // Extract subject, chapter, section, 
+  $subject_class = _codebase_parse_subject($file_lines);
+
+  // Extract auth info: author, institution, date
+  $auth = _codebase_parse_auth($file_lines);
+
+  // Extract textbook info: titletext1, edition, authortext1, section1, problem1
+  $textbook = _codebase_parse_textbook($file_lines);
 
   // First create the source code node.
   $node = new stdClass();
@@ -118,7 +134,7 @@ function codebase_apply_import_code($file, $args) {
   node_object_prepare($node);
 
   $node->language = LANGUAGE_NONE;
-  $node->field_code2[$node->language][0]['value'] =  '<code>'.$file_contents.'</code>';
+  $node->field_code2[$node->language][0]['value'] =  '[perl]'.$file_contents.'[/perl]';
   $node->field_code2[$node->language][0]['format'] =  'geshifilter';
   $node->title = t("Source of ") . $filename;
   $node->source_code_language = $langtype;
@@ -393,6 +409,8 @@ function codebase_flush_codebase() {
   $sql_delete_problem_url_aliases
     = "DELETE FROM {url_alias} WHERE alias LIKE 'problem/%'";
 
+# todo - delete from field_* tables
+
   watchdog('codebase', "flushing node_revision");
   db_query($sql_delete_node_revision);
   watchdog('codebase', "flushing filenodes and aliases");
@@ -428,7 +446,7 @@ function codebase_update_file($node) {
   }
 
   $sourcenode = node_load($sourcenid);
-  $sourcenode->body[$sourcenode->language][0]['value'] = '<code>'.file_get_contents($filepath).'</code>';
+  $sourcenode->body[$sourcenode->language][0]['value'] = '[perl]'.file_get_contents($filepath).'[/perl]';
   $sourcenode = node_submit($sourcenode);
   node_save($sourcenode);
 
